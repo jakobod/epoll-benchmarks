@@ -45,6 +45,8 @@ detail::error multiplexer::init(socket_manager_factory_ptr factory) {
   auto accept_socket_pair
     = std::get<std::pair<net::tcp_accept_socket, uint16_t>>(res);
   auto accept_socket = accept_socket_pair.first;
+  if (nonblocking(accept_socket, true))
+    return detail::error(detail::socket_operation_failed, "nonblocking");
   std::cerr << "acceptor is listening on port: " << accept_socket_pair.second
             << " socket_id = " << accept_socket.id << std::endl;
   add(std::make_shared<acceptor>(accept_socket, this, std::move(factory)),
@@ -62,7 +64,6 @@ void multiplexer::start() {
 
 void multiplexer::shutdown() {
   if (std::this_thread::get_id() == mpx_thread_id_) {
-    std::cerr << "shutdown() called by multiplexer" << std::endl;
     // disable all managers for reading!
     for (auto it = managers_.begin(); it != managers_.end(); ++it) {
       auto& mgr = it->second;
@@ -75,7 +76,6 @@ void multiplexer::shutdown() {
     shutting_down_ = true;
     running_ = false;
   } else if (!shutting_down_) {
-    std::cerr << "shutdown() called by outstanding" << std::endl;
     std::byte code{pollset_updater::shutdown_code};
     auto res = write(pipe_writer_, detail::byte_span(&code, 1));
     if (res != 1) {
@@ -98,8 +98,6 @@ void multiplexer::handle_error(detail::error err) {
 void multiplexer::add(socket_manager_ptr mgr, operation initial) {
   if (!mgr->mask_add(initial))
     return;
-  std::cerr << "ADD op = " << to_string(initial)
-            << " on fd = " << mgr->handle().id << std::endl;
   mod(mgr->handle().id, EPOLL_CTL_ADD, mgr->mask());
   managers_.emplace(mgr->handle().id, std::move(mgr));
 }
@@ -107,16 +105,12 @@ void multiplexer::add(socket_manager_ptr mgr, operation initial) {
 void multiplexer::enable(socket_manager& mgr, operation op) {
   if (!mgr.mask_add(op))
     return;
-  std::cerr << "ENABLE op = " << to_string(op) << " on fd = " << mgr.handle().id
-            << std::endl;
   mod(mgr.handle().id, EPOLL_CTL_MOD, mgr.mask());
 }
 
 void multiplexer::disable(socket_manager& mgr, operation op, bool remove) {
   if (!mgr.mask_del(op))
     return;
-  std::cerr << "DISABLE op = " << to_string(op)
-            << " on fd = " << mgr.handle().id << std::endl;
   mod(mgr.handle().id, EPOLL_CTL_MOD, mgr.mask());
   if (remove && mgr.mask() == operation::none)
     del(mgr.handle());
@@ -126,7 +120,6 @@ void multiplexer::del(socket handle) {
   mod(handle.id, EPOLL_CTL_DEL, operation::none);
   managers_.erase(handle.id);
   std::cerr << "deleted fd = " << handle.id << std::endl;
-  // pollset updater is left!
   if (shutting_down_ && managers_.empty())
     running_ = false;
 }
@@ -143,7 +136,6 @@ multiplexer::manager_map::iterator multiplexer::del(manager_map::iterator it) {
 }
 
 void multiplexer::mod(int fd, int op, operation events) {
-  std::cerr << "mod: fd = " << fd << " op = " << op << std::endl;
   epoll_event event = {};
   event.events = static_cast<uint32_t>(events);
   event.data.fd = fd;
@@ -154,7 +146,6 @@ void multiplexer::mod(int fd, int op, operation events) {
 
 void multiplexer::run() {
   while (running_) {
-    std::cerr << "waiting on epoll_wait" << std::endl;
     auto num_events = epoll_wait(epoll_fd_, pollset_.data(),
                                  static_cast<int>(pollset_.size()), -1);
     if (num_events < 0) {
@@ -162,8 +153,8 @@ void multiplexer::run() {
         case EINTR:
           continue;
         default:
-          std::cerr << "epoll_wait failed: " << strerror(errno) << std::endl;
-          running_ = false;
+          handle_error({detail::runtime_error,
+                        std::string("epoll_wait failed: ") + strerror(errno)});
           break;
       }
     } else {

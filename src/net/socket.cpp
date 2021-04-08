@@ -17,7 +17,6 @@
 namespace net {
 
 void close(socket sock) {
-  std::cerr << "closing socket " << sock.id << std::endl;
   ::close(sock.id);
 }
 

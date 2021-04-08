@@ -24,3 +24,11 @@ using socket_manager_ptr = std::shared_ptr<socket_manager>;
 using socket_manager_factory_ptr = std::shared_ptr<socket_manager_factory>;
 
 } // namespace net
+
+namespace benchmark {
+
+class tcp_stream_writer;
+
+using tcp_stream_writer_ptr = std::shared_ptr<tcp_stream_writer>;
+
+}; // namespace benchmark

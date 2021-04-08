@@ -4,6 +4,8 @@
  *  @date 25.03.2021
  */
 
+#include <atomic>
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <variant>
@@ -20,11 +22,26 @@
 #include "net/tcp_stream_socket.hpp"
 
 struct dummy_factory : public net::socket_manager_factory {
+  dummy_factory(std::atomic<size_t>& received_bytes,
+                std::atomic<size_t>& sent_bytes,
+                std::atomic<size_t>& num_handled_events)
+    : received_bytes_(received_bytes),
+      sent_bytes_(sent_bytes),
+      num_handled_events_(num_handled_events) {
+    // nop
+  }
+
   net::socket_manager_ptr make(net::socket handle,
                                net::multiplexer* mpx) override {
     std::cout << "factory created new socket manager" << std::endl;
-    return std::make_shared<net::socket_manager_impl>(handle, mpx, true);
+    return std::make_shared<net::socket_manager_impl>(
+      handle, mpx, true, received_bytes_, sent_bytes_, num_handled_events_);
   }
+
+private:
+  std::atomic<size_t>& received_bytes_;
+  std::atomic<size_t>& sent_bytes_;
+  std::atomic<size_t>& num_handled_events_;
 };
 
 template <class What>
@@ -54,7 +71,11 @@ void test_connect() {
 
 void run_server() {
   net::multiplexer mpx;
-  auto factory = std::make_shared<dummy_factory>();
+  std::atomic<size_t> received_bytes;
+  std::atomic<size_t> sent_bytes;
+  std::atomic<size_t> num_handled_events;
+  auto factory = std::make_shared<dummy_factory>(received_bytes, sent_bytes,
+                                                 num_handled_events);
   if (auto err = mpx.init(std::move(factory)))
     exit(err);
   mpx.start();
@@ -63,49 +84,48 @@ void run_server() {
   std::string dummy;
   std::getline(std::cin, dummy);
 
-  std::cout << "shutting down the multiplexer" << std::endl;
   mpx.shutdown();
-  std::cout << "joining now!" << std::endl;
   mpx.join();
-  std::cout << "Done and joined. BYEEEEE!" << std::endl;
+  std::cout << std::endl << "=========== SUMMARY =============" << std::endl;
+  std::cout << "num_handled_events: " << num_handled_events << " events"
+            << std::endl;
+  std::cout << "sent_bytes: " << sent_bytes << " bytes" << std::endl;
+  std::cout << "received_bytes: " << received_bytes << " bytes" << std::endl;
 }
 
-void run_client(std::string host, uint16_t port, size_t amount) {
-  // auto res = net::make_tcp_accept_socket();
-  // if (auto err = std::get_if<detail::error>(&res))
-  //   exit(*err);
-  // auto accept_socket_pair = std::get<net::acceptor_pair>(res);
-  // auto acceptor_guard = detail::make_socket_guard(accept_socket_pair.first);
-  // std::cerr << "Acceptor listening on port: " << accept_socket_pair.second
-  //           << " fd = " << (*acceptor_guard).id << std::endl;
-  // auto connection_res = net::make_connected_tcp_stream_socket(
-  //   "127.0.0.1", accept_socket_pair.second);
-  // if (auto err = std::get_if<detail::error>(&connection_res))
-  //   exit(*err);
-  // auto connected_guard = detail::make_socket_guard(
-  //   std::get<net::tcp_stream_socket>(connection_res));
-  // auto accepted_guard = detail::make_socket_guard(accept(*acceptor_guard));
-  // if (accepted_guard == net::invalid_socket)
-  //   exit("accept returned an invalid socket!");
-  // std::cout << "Works like a charm!" << std::endl;
-  benchmark::tcp_stream_writer writer(amount);
-  if (auto err = writer.init(host, port))
-    exit(err);
-  writer.start();
-  std::cout << "waiting for user input" << std::endl;
-  std::string dummy;
-  std::getline(std::cin, dummy);
-  writer.stop();
-  std::cerr << "joining now!" << std::endl;
-  writer.join();
-  std::cerr << "DONE!" << std::endl;
+void run_client(std::string host, uint16_t port) {
+  std::atomic<size_t> received_bytes;
+  std::atomic<size_t> sent_bytes;
+
+  std::vector<benchmark::tcp_stream_writer_ptr> writers;
+  for (int i = 0; i < 10; ++i) {
+    writers.emplace_back(std::make_shared<benchmark::tcp_stream_writer>(
+      received_bytes, sent_bytes));
+    if (auto err = writers.back()->init(host, port))
+      exit(err);
+  }
+  for (auto& writer : writers)
+    writer->start();
+
+  // std::string dummy;
+  // std::getline(std::cin, dummy);
+  std::this_thread::sleep_for(std::chrono::seconds(10));
+  std::cout << "woke up!" << std::endl;
+  for (auto& writer : writers)
+    writer->stop();
+  for (auto& writer : writers)
+    writer->join();
+
+  writers.clear();
+  std::cout << std::endl << "=========== SUMMARY =============" << std::endl;
+  std::cout << "sent_bytes: " << sent_bytes << " bytes" << std::endl;
+  std::cout << "received_bytes: " << received_bytes << " bytes" << std::endl;
 }
 
 int main(int argc, char** argv) {
   bool is_server = true;
   std::string host = "";
   uint16_t port = 0;
-  size_t amount = 0;
 
   for (int i = 0; i < argc; ++i) {
     switch (argv[i][1]) {
@@ -121,9 +141,6 @@ int main(int argc, char** argv) {
       case 'h':
         host = std::string(argv[++i]);
         break;
-      case 'a':
-        amount = std::stoi(std::string(argv[++i]));
-        break;
       default:
         break;
     }
@@ -131,5 +148,5 @@ int main(int argc, char** argv) {
   if (is_server)
     run_server();
   else
-    run_client(host, port, amount);
+    run_client(host, port);
 }

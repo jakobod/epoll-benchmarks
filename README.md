@@ -5,11 +5,10 @@
 
 
 # TODO
-- Way to securely shutdown the multiplexer!
-- Thread safe access to multiplexer!
-
-Reading and writing should be nonblocking!
+- divide counting read and write events -> don't count both in one variable
 
 - io_uring implementation
 
 - Think about how to benchmark
+  - disconnect and connect randomly
+  - Is mirroring a good approach for the server side??

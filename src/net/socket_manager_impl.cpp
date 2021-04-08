@@ -14,18 +14,25 @@
 
 namespace net {
 
-socket_manager_impl::socket_manager_impl(socket handle, multiplexer* mpx,
-                                         bool mirror)
+socket_manager_impl::socket_manager_impl(
+  socket handle, multiplexer* mpx, bool mirror,
+  std::atomic<size_t>& received_bytes, std::atomic<size_t>& sent_bytes,
+  std::atomic<size_t>& num_handled_events)
   : socket_manager(handle, mpx),
     mirror_(mirror),
     received_bytes_(0),
-    num_handled_events_(0) {
+    sent_bytes_(0),
+    num_handled_events_(0),
+    glob_received_bytes_(received_bytes),
+    glob_sent_bytes_(sent_bytes),
+    glob_num_handled_events_(num_handled_events) {
   // nop
 }
 
 socket_manager_impl::~socket_manager_impl() {
-  std::cerr << "handled " << num_handled_events_ << " events and received "
-            << received_bytes_ << " bytes" << std::endl;
+  glob_sent_bytes_ += sent_bytes_;
+  glob_received_bytes_ += received_bytes_;
+  glob_num_handled_events_ += num_handled_events_;
 }
 
 bool socket_manager_impl::handle_read_event() {

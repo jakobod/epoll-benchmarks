@@ -16,12 +16,19 @@ namespace benchmark {
 
 using detail::none;
 
-tcp_stream_writer::tcp_stream_writer(size_t to_write)
-  : to_write_(to_write), running_(false) {
+tcp_stream_writer::tcp_stream_writer(std::atomic<size_t>& received_bytes,
+                                     std::atomic<size_t>& sent_bytes)
+  : running_(false),
+    received_bytes_(0),
+    sent_bytes_(0),
+    glob_received_bytes_(received_bytes),
+    glob_sent_bytes_(sent_bytes) {
   // nop
 }
 
 tcp_stream_writer::~tcp_stream_writer() {
+  glob_sent_bytes_ += sent_bytes_;
+  glob_received_bytes_ += received_bytes_;
   close(handle_);
 }
 
@@ -31,21 +38,13 @@ detail::error tcp_stream_writer::init(const std::string ip,
   if (auto err = std::get_if<detail::error>(&connection_res))
     return *err;
   handle_ = std::get<net::tcp_stream_socket>(connection_res);
-  std::cout << "done initializing the writer" << std::endl;
   return none;
-}
-
-void tcp_stream_writer::run() {
-  while (running_) {
-    if (!write() || !read())
-      running_ = false;
-  }
-  std::cerr << "writer DONE!" << std::endl;
 }
 
 void tcp_stream_writer::start() {
   running_ = true;
-  writer_thread_ = std::thread(&tcp_stream_writer::run, this);
+  reader_thread_ = std::thread(&tcp_stream_writer::read, this);
+  writer_thread_ = std::thread(&tcp_stream_writer::write, this);
 }
 
 void tcp_stream_writer::stop() {
@@ -55,30 +54,38 @@ void tcp_stream_writer::stop() {
 void tcp_stream_writer::join() {
   if (writer_thread_.joinable())
     writer_thread_.join();
+  if (reader_thread_.joinable())
+    reader_thread_.join();
 }
 
-bool tcp_stream_writer::read() {
-  auto read = net::read(handle_, data_);
-  if (read <= 0) {
-    if (!net::last_socket_error_is_temporary()) {
-      std::cerr << "ERROR read failed: " << net::last_socket_error_as_string()
-                << std::endl;
-      return false;
+void tcp_stream_writer::read() {
+  detail::byte_array<8192> read_buffer_;
+  while (running_) {
+    auto read_res = net::read(handle_, read_buffer_);
+    if (read_res <= 0) {
+      if (!net::last_socket_error_is_temporary()) {
+        std::cerr << "ERROR read failed: " << net::last_socket_error_as_string()
+                  << std::endl;
+        running_ = false;
+      }
     }
+    received_bytes_ += read_res;
   }
-  return true;
 }
 
-bool tcp_stream_writer::write() {
-  auto written = net::write(handle_, data_);
-  if (written <= 0) {
-    if (!net::last_socket_error_is_temporary()) {
-      std::cerr << "ERROR write failed: " << net::last_socket_error_as_string()
-                << std::endl;
-      return false;
+void tcp_stream_writer::write() {
+  detail::byte_array<8192> write_buffer_;
+  while (running_) {
+    auto written = net::write(handle_, write_buffer_);
+    if (written <= 0) {
+      if (!net::last_socket_error_is_temporary()) {
+        std::cerr << "ERROR write failed: "
+                  << net::last_socket_error_as_string() << std::endl;
+        running_ = false;
+      }
     }
+    sent_bytes_ += written;
   }
-  return true;
 }
 
 } // namespace benchmark
