@@ -39,8 +39,8 @@ public:
 
 private:
   bool mirror_ = true;
-  size_t byte_diff_ = 0;
-  detail::byte_array<8096> buf_;
+  detail::byte_array<8096> receive_buf_;
+  detail::byte_buffer write_buf_;
   result_ptr results_ = nullptr;
 };
 

@@ -27,7 +27,7 @@ socket_manager_impl::~socket_manager_impl() {
 
 bool socket_manager_impl::handle_read_event() {
   for (int i = 0; i < 20; ++i) {
-    auto read_res = read(handle<tcp_stream_socket>(), buf_);
+    auto read_res = read(handle<tcp_stream_socket>(), receive_buf_);
     if (read_res == 0)
       return false;
     if (read_res < 0) {
@@ -40,23 +40,23 @@ bool socket_manager_impl::handle_read_event() {
         return false;
       }
     }
-    byte_diff_ += read_res;
     results_->add_received_bytes(read_res);
-    if (mirror_)
+    if (mirror_) {
+      write_buf_.insert(write_buf_.end(), receive_buf_.begin(),
+                        receive_buf_.end());
       register_writing();
+    }
   }
   return true;
 }
 
 bool socket_manager_impl::handle_write_event() {
   for (int i = 0; i < 20; ++i) {
-    auto num_bytes = std::min(byte_diff_, buf_.size());
-    auto write_res = write(handle<tcp_stream_socket>(),
-                           std::span(buf_.data(), num_bytes));
+    auto write_res = write(handle<tcp_stream_socket>(), write_buf_);
     if (write_res > 0) {
-      byte_diff_ -= write_res;
+      write_buf_.erase(write_buf_.begin(), write_buf_.begin() + write_res);
       results_->add_sent_bytes(write_res);
-      return byte_diff_ == 0;
+      return write_buf_.empty();
     } else if (write_res <= 0) {
       if (last_socket_error_is_temporary())
         return true;
